@@ -44,6 +44,10 @@ Reply = namedtuple("Reply", [
     ])
 
 
+def get_serial(msg):
+    return unpack_from(">H", msg, 0)[0]
+
+
 def parse_dns_reply(msg):
     """ Function used to parse the DNS reply message.
         
