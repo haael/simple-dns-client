@@ -1,18 +1,16 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 """
     This is a simple dnsclient that supports A, AAAA, MX, SOA, NS and CNAME
     queries written in python.
-
 """
 
 import sys
 import socket
 import binascii
 
-import src.serverconf as serverconf
-import src.queryfactory as queryfactory
-import src.queryhandler as queryhandler
+from query import create_dns_query
+from reply import parse_dns_reply
 
 
 def main():
@@ -38,6 +36,7 @@ def main():
 
     return 0
 
+
 def query_dns_server(packet):
     """ Function used to create a UDP socket, to send the DNS query to the server
         and to receive the DNS reply.
@@ -56,7 +55,7 @@ def query_dns_server(packet):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     except socket.error:
-        print "[Error]: Faild to create socket. Exiting..."
+        #print "[Error]: Faild to create socket. Exiting..."
         exit(1)
 
     # get DNS server IPs from dns_servers.conf file
@@ -79,18 +78,35 @@ def query_dns_server(packet):
 
     # output error message if no server could respond
     if not got_response:
-        print "[Error]: No response received from server. Exiting..."
+        #print "[Error]: No response received from server. Exiting..."
         exit(0)
 
     return recv[0]
 
-def usage():
-    """ Function that checks if the required arguments are given 
-    """
 
-    if len(sys.argv) != 3:
-        print "Usage: ./dnsclient.py <DNS name/IP> <query type>"
-        exit(0)
 
 if __name__ == "__main__":
-    main()
+    from random import randrange
+    name = sys.argv[1]
+    type_ = sys.argv[2]
+
+    print(name, type_)
+    query = create_dns_query(name, type_, randrange(2**16))
+    print(query)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.sendto(query, ('127.0.0.53', 53))
+    reply, l = sock.recvfrom(1024)
+    print(reply)
+    answer = parse_dns_reply(reply)
+    print(answer)
+
+
+
+
+
+
+
+
+
+
+

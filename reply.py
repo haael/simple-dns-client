@@ -1,8 +1,8 @@
-""" Module used for interpreting answers to queries
-"""
+#!/usr/bin/python3
 
-from socket import inet_ntop
-from socket import AF_INET6
+
+"Module used for interpreting answers to queries."
+
 from struct import unpack_from
 from collections import namedtuple
 
@@ -43,12 +43,12 @@ Reply = namedtuple("Reply", [
     'answer',
     ])
 
-def parse_answer(msg, qname_len):
+
+def parse_dns_reply(msg):
     """ Function used to parse the DNS reply message.
         
     Args:
         msg: The message recieved from the DNS server
-        qname_len: The length of the name beign querried
 
     Returns:
         The DNS reply message as a Reply namedtuple in the following
@@ -56,27 +56,32 @@ def parse_answer(msg, qname_len):
 
     """
 
-    header = extract_header(msg)
-    question = extract_question(msg, qname_len)
-    # 12 is header length and 4 is len(qtype) + len(qclass)
-    offset = 12 + qname_len + 4 
+    offset = 0
+    header, l = extract_header(msg, offset)
+    offset += l
+    question, l = extract_question(msg, offset)
+    offset += l
 
     answer = []
     for _ in range(header.ancount):
-        (a, offset) = extract_answer(msg, offset)
+        a, l = extract_answer(msg, offset)
         answer.append(a)
+        offset += l
 
     for _ in range(header.nscount):
-        (a, offset) = extract_answer(msg, offset)
+        a, l = extract_answer(msg, offset)
         answer.append(a)
+        offset += l
 
     for _ in range(header.arcount):
-        (a, offset) = extract_answer(msg, offset)
+        a, l = extract_answer(msg, offset)
         answer.append(a)
+        offset += l
 
     return Reply(header, question, answer)
 
-def extract_header(msg):
+
+def extract_header(msg, offset):
     """ Function used to extract the header from the DNS reply message.
         
     Args:
@@ -89,7 +94,7 @@ def extract_header(msg):
 
     """
 
-    raw_header = unpack_from(">HHHHHH", msg, 0)
+    raw_header = unpack_from(">HHHHHH", msg, offset)
 
     x_id = raw_header[0]
     flags = raw_header[1]
@@ -107,10 +112,10 @@ def extract_header(msg):
     nscount = raw_header[4]
     arcount = raw_header[5]
 
-    return Header(x_id, qr, opcode, aa, tc, rd, ra, rcode, qdcount, ancount, nscount, arcount)
+    return Header(x_id, qr, opcode, aa, tc, rd, ra, rcode, qdcount, ancount, nscount, arcount), 12
 
 
-def extract_question(msg, qname_len):
+def extract_question(msg, offset):
     """ Function used to extract the question section from a DNS reply.
         
     Args:
@@ -123,20 +128,20 @@ def extract_question(msg, qname_len):
 
     """
 
-    # 12 is len(header_section)
-    offset = 12
-
     # qname
     raw_qname = []
-    for i in range(0, qname_len):
-        byte = unpack_from(">B", msg, offset + i)[0]
+    byte = None
+    while byte != 0:
+        byte = unpack_from(">B", msg, offset)[0]
         raw_qname.append(byte)
+        offset += 1
 
-    qname = convert_to_name(raw_qname)
-    qtype = unpack_from(">H", msg, offset + qname_len)[0]
-    qclass = unpack_from(">H", msg, offset + qname_len + 2)[0]
+    qname = dns_decode(bytes(raw_qname))
+    qtype = unpack_from(">H", msg, offset)[0]
+    qclass = unpack_from(">H", msg, offset + 2)[0]
 
-    return Question(qname, qtype, qclass)
+    return Question(qname, qtype, qclass), len(raw_qname) + 2 + 2
+
 
 def extract_answer(msg, offset):
     """ Function used to extract a RR from a DNS reply.
@@ -157,11 +162,11 @@ def extract_answer(msg, offset):
 
     """
 
-    (name, bytes_read) = extract_name(msg, offset)
-    offset = offset + bytes_read
+    name, bytes_read = extract_name(msg, offset)
+    offset += bytes_read
 
     aux = unpack_from(">HHIH", msg, offset)
-    offset = offset + 10
+    offset += 10
 
     x_type = aux[0]
     x_class = aux[1]
@@ -171,33 +176,33 @@ def extract_answer(msg, offset):
     rdata = ''
     if x_type == 1:
         # A type
+        a_type = 'A'
         rdata = extract_a_rdata(msg, offset, rdlength)
-        offset = offset + rdlength
     elif x_type == 2:
         # NS type
+        a_type = 'NS'
         rdata = extract_ns_rdata(msg, offset, rdlength)
-        offset = offset + rdlength
     elif x_type == 5:
         # CNAME type
+        a_type = 'CNAME'
         rdata = extract_cname_rdata(msg, offset, rdlength)
-        offset = offset + rdlength
     elif x_type == 6:
         # SOA type
+        a_type = 'SOA'
         rdata = extract_soa_rdata(msg, offset, rdlength)
-        offset = offset + rdlength
     elif x_type == 15:
         # MX type
+        a_type = 'MX'
         rdata = extract_mx_rdata(msg, offset, rdlength)
-        offset = offset + rdlength
     elif x_type == 28:
         # AAAA type
+        a_type = 'AAAA'
         rdata = extract_aaaa_rdata(msg, offset, rdlength)
-        offset = offset + rdlength
     else:
-        print('[Error]: DNS Response not recognized (type ' + str(x_type) + '). Exiting...')
-        exit(0)
+        raise ValueError(f"DNS Response not recognized (x_type={x_type}).")
 
-    return (Answer(name, x_type, x_class, ttl, rdlength, rdata), offset)
+    return Answer(name, a_type, x_class, ttl, rdlength, rdata), bytes_read + 10 + rdlength
+
 
 def extract_a_rdata(msg, offset, rdlength):
     """ Function used to extract the RDATA from an A type message.
@@ -215,13 +220,32 @@ def extract_a_rdata(msg, offset, rdlength):
 
     fmt_str = ">" + "B" * rdlength
     rdata = unpack_from(fmt_str, msg, offset)
+    return '.'.join(str(_x) for _x in rdata)
 
-    ip = ''
-    for byte in rdata:
-        ip += str(byte) + '.'
-    ip = ip[0:-1]
 
-    return ip
+def extract_aaaa_rdata(msg, offset, rdlength):
+    """ Function used to extract the RDATA from an AAAA type message.
+        
+    Args:
+        msg: The message recieved from the DNS server
+        offset: The number of bytes from the start of the message until the end
+            of the question section (or until the end of the last RR)
+        rdlength: The length of the RDATA section
+
+    Returns:
+        The RDATA field of the answer section (an IPv6 address as a string)
+
+    """
+
+    fmt_str = ">" + "H" * (rdlength // 2)
+    rdata = unpack_from(fmt_str, msg, offset)
+
+    c = []
+    for b in rdata:
+        c.append(hex(b)[2:])
+
+    return ':'.join(c)
+
 
 def extract_ns_rdata(msg, offset, rdlength):
     """ Function used to extract the RDATA from a NS type message.
@@ -239,10 +263,9 @@ def extract_ns_rdata(msg, offset, rdlength):
 
     """
 
-    (name, bytes_read) = extract_name(msg, offset)
-    offset += bytes_read
+    name, bytes_read = extract_name(msg, offset)
+    return name
 
-    return (name, offset)
 
 def extract_cname_rdata(msg, offset, rdlength):
     """ Function used to extract the RDATA from a CNAME type message.
@@ -260,10 +283,9 @@ def extract_cname_rdata(msg, offset, rdlength):
 
     """
 
-    (name, bytes_read) = extract_name(msg, offset)
-    offset += bytes_read
+    name, bytes_read = extract_name(msg, offset)
+    return name
 
-    return (name, offset)
 
 def extract_soa_rdata(msg, offset, rdlength):
     """ Function used to extract the RDATA from a SOA type message.
@@ -297,6 +319,7 @@ def extract_soa_rdata(msg, offset, rdlength):
 
     return (pns, amb, serial, refesh, retry, expiration, ttl)    
 
+
 def extract_mx_rdata(msg, offset, rdlength):
     """ Function used to extract the RDATA from a MX type message.
         
@@ -312,42 +335,12 @@ def extract_mx_rdata(msg, offset, rdlength):
 
     """
 
-    preference = unpack_from(">H", msg, offset)
+    preference = unpack_from(">H", msg, offset)[0]
     offset += 2
     
-    fmt_str = ">" + "B" * (rdlength - 2)
-    rdata = unpack_from(fmt_str, msg, offset)[0]
+    mail_ex, l = extract_name(msg, offset)
+    return preference, mail_ex
 
-    mail_ex = ''
-    for byte in rdata:
-         mail_ex += chr(byte)
-    mail_ex += '\x00'
-
-    return (preference, mail_ex)
-
-def extract_aaaa_rdata(msg, offset, rdlength):
-    """ Function used to extract the RDATA from an AAAA type message.
-        
-    Args:
-        msg: The message recieved from the DNS server
-        offset: The number of bytes from the start of the message until the end
-            of the question section (or until the end of the last RR)
-        rdlength: The length of the RDATA section
-
-    Returns:
-        The RDATA field of the answer section (an IPv6 address as a string)
-
-    """
-
-    fmt_str = ">" + "H" * (rdlength / 2)
-    rdata = unpack_from(fmt_str, msg, offset)
-
-    ip = ''
-    for short in rdata:
-        ip += format(short, 'x') + ':'
-    ip = ip[0:-1]
-
-    return ip
 
 def extract_name(msg, offset):
     """ Function used to extract the name field from the answer section.
@@ -390,11 +383,12 @@ def extract_name(msg, offset):
     if jump == True:
         bytes_read += 1
 
-    name = convert_to_name(raw_name)
+    name = dns_decode(bytes(raw_name))
 
-    return (name, bytes_read)
+    return name, bytes_read
 
-def convert_to_name(raw_name):
+
+def dns_decode(raw_name):
     """ Function used to convert an url from dns form to normal form.
 
     Args:
@@ -409,81 +403,49 @@ def convert_to_name(raw_name):
     """
 
     # might not work as expected in some cases - todo
-    name = ''
-    for byte in raw_name:
-        if byte < 30:
-            name += '.'
-        else:
-            name += chr(int(byte))
+    name = []
+    pos = 0
+    while pos < len(raw_name):
+        l = raw_name[pos]
+        if l == 0: break
+        name.append(raw_name[pos + 1 : pos + 1 + l].decode('ascii'))
+        pos += l + 1
 
-    name = name[1:-1]
+    return ".".join(name)
 
-    return name
 
-def print_reply(reply):
-    """ Function for printing a DNS message reply.
+if __debug__ and __name__ == '__main__':
+    response = b'`V\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00R\x9b\x00\x04]\xb8\xd8"'
+    print(parse_dns_reply(response))
 
-    Args:
-        The parsed DNS reply
+    response = bytes.fromhex('''
+00 00 81 80 00 01 00 01  00 00 00 00 03 77 77 77
+07 65 78 61 6d 70 6c 65  03 63 6f 6d 00 00 01 00
+01 03 77 77 77 07 65 78  61 6d 70 6c 65 03 63 6f
+6d 00 00 01 00 01 00 00  00 80 00 04 C0 00 02 01
+    ''')
+    print(parse_dns_reply(response))
 
-    """
+    response = bytes.fromhex('''
+0000 8580 0001 0001 0001 0002 0377 7777
+0765 7861 6d70 6c65 0363 6f6d 0000 0100
+01c0 0c00 0100 0100 093a 8000 0401 0203
+04c0 1000 0200 0100 093a 8000 0b09 6c6f
+6361 6c68 6f73 7400 c03d 0001 0001 0009
+3a80 0004 7f00 0001 c03d 001c 0001 0009
+3a80 0010 0000 0000 0000 0000 0000 0000
+0000 0001                
+    ''')
+    print(parse_dns_reply(response))
 
-    print "\n"
-    print "Header Section"
-    print "----------------"
-    print    ("id: " + str(reply.header.x_id) 
-            + ", qr: " + str(reply.header.qr) 
-            + ", opcode: " + str(reply.header.opcode) 
-            + ", rcode: " + str(reply.header.rcode))
-    print    ("aa: " + str(reply.header.aa) 
-            + ", tc: " + str(reply.header.tc) 
-            + ", rd: " + str(reply.header.rd) 
-            + ", ra: " + str(reply.header.ra))
-    print    ("qdcount: " + str(reply.header.qdcount) 
-            + ", ancount: " + str(reply.header.ancount) 
-            + ", nscount: " + str(reply.header.nscount) 
-            + ", arcount: " + str(reply.header.arcount))
-    print "\n"
+    response = bytes.fromhex('''
+24 1a 81 80 00 01
+00 03 00 00 00 00 03 77  77 77 06 67 6f 6f 67 6c
+65 03 63 6f 6d 00 00 01  00 01 c0 0c 00 05 00 01
+00 05 28 39 00 12 03 77  77 77 01 6c 06 67 6f 6f
+67 6c 65 03 63 6f 6d 00  c0 2c 00 01 00 01 00 00
+00 e3 00 04 42 f9 59 63  c0 2c 00 01 00 01 00 00
+00 e3 00 04 42 f9 59 68                         
+    ''')
+    print(parse_dns_reply(response))
 
-    print "Question Section"
-    print "----------------"
-    print "qname: " + str(reply.question.qname)
-    print "qtype: " + str(reply.question.qtype)
-    print "qclass: " + str(reply.question.qclass)
-    print "\n"
-
-    print "Answer Section"
-    print "----------------"
-    for entry in reply.answer:
-        print "name: " + str(entry.name)
-        print ("type: " + str(entry.x_type) + ", class: " + str(entry.x_class) 
-            + ", ttl: " + str(entry.ttl) + ", rdlength: " + str(entry.rdlength) + ", rdata: ")
-
-        if entry.x_type == 1:
-            print str(entry.rdata)
-        elif entry.x_type == 2:
-            print str(entry.rdata)
-        elif entry.x_type == 6:
-            print tuple_str(entry.rdata)
-        elif entry.x_type == 15:
-            print tuple_str(entry.rdata)
-        elif entry.x_type == 28:
-            print str(entry.rdata)
-    print "\n"
-
-def tuple_str(t):
-    """ Auxiliary function used for turning a tuple into a string.
-
-    Args:
-        The tuple
-
-    Returns:
-        The string form of the tuple
-
-    """
-
-    res = ''
-    for i in t:
-        res += str(i) + ' '
-
-    return res

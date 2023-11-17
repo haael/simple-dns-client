@@ -1,16 +1,16 @@
-"""
-    Module used for creating DNS queries.
-"""
+#!/usr/bin/python3
+
+"Module used for creating DNS queries."
 
 from struct import pack
-from os import getpid
 
 # Opcodes
 QUERY = 0
 IQUERY = 1
 STATUS = 2
 
-def create_header(opcode):
+
+def create_header(opcode, x_id):
     """ Function used to create a DNS query header.
     
     Args:
@@ -22,11 +22,11 @@ def create_header(opcode):
 
     """
 
-    header = ''
-    flags = ''
+    header = []
+    flags = 0
 
     # Message ID
-    header += pack(">H", getpid())
+    header.append(pack(">H", x_id))
 
     # Flags (QR, opcode, AA, TC, RD, RA, Z, RCODE)
     if opcode == QUERY:
@@ -36,21 +36,24 @@ def create_header(opcode):
         flags = 0b0000100100000000
     elif opcode == STATUS:
         flags = 0b0001000100000000
+    else:
+        raise ValueError
 
-    header += pack(">H", flags)
+    header.append(pack(">H", flags))
 
     # QDCOUNT
-    header += pack(">H", 1)
+    header.append(pack(">H", 1))
     # ANCOUNT
-    header += pack(">H", 0)
+    header.append(pack(">H", 0))
     # NSCOUNT
-    header += pack(">H", 0)
+    header.append(pack(">H", 0))
     # ARCOUNT
-    header += pack(">H", 0)
+    header.append(pack(">H", 0))
 
-    return header
+    return bytes().join(header)
 
-def get_dns_query(domain_name, query_type):
+
+def create_dns_query(domain_name, query_type, x_id):
     """ Function used to create a DNS query question section.
     
     Args:
@@ -58,13 +61,12 @@ def get_dns_query(domain_name, query_type):
         query_type = the query type of the DNS message
 
     Returns:
-        The DNS query question section and the length of the qname in a tuple
-        form: (question, qname_len)
+        The DNS query question section.
 
     """
 
     # QNAME
-    qname = create_qname(domain_name)
+    qname = dns_encode(domain_name)
 
     code = 0
     # QTYPE - query for A record
@@ -85,20 +87,17 @@ def get_dns_query(domain_name, query_type):
         code = 15
     elif query_type == "TXT":
         # text strings
-        print "[Error]: Not implemented. Exiting..."
-        exit(1)
         code = 16
+        raise NotImplementedError
     elif query_type == "PTR":
         # domain name pointer
         code = 12
-        print "[Error]: Not implemented. Exiting..."
-        exit(1)
+        raise NotImplementedError
     elif query_type == "AAAA":
         # AAAA record
         code = 28
     else:
-        print "[Error]: Invalid query. Exiting..."
-        exit(1)
+        raise ValueError("Invalid query.")
 
     qtype = pack(">H", code)
 
@@ -106,11 +105,12 @@ def get_dns_query(domain_name, query_type):
     qclass = pack(">H", 1)
 
     # whole question section
-    question = create_header(QUERY) + qname + qtype + qclass
+    question = bytes().join([create_header(QUERY, x_id), qname, qtype, qclass])
 
-    return (question, len(qname))
+    return question
 
-def create_qname(domain_name):
+
+def dns_encode(domain_name):
     """ Function used to transfrom URL from normal form to DNS form.
 
     Args:
@@ -120,17 +120,27 @@ def create_qname(domain_name):
         The URL in DNS form
 
     Example:
-        3www7example3com0 to www.example.com
+        www.example.com to 3www7example3com0
 
     """
 
-    qname = ''
+    qname = []
 
     split_name = domain_name.split(".")
     for atom in split_name:
-        qname += pack(">B", len(atom))
-        for byte in bytes(atom):
-            qname += byte
-    qname += '\x00'
+        qname.append(pack(">B", len(atom)))
+        qname.append(atom.encode('ascii'))
+    qname.append(b'\x00')
 
-    return qname
+    return bytes().join(qname)
+
+
+if __debug__ and __name__ == '__main__':
+    print([hex(_x) for _x in create_dns_query('www.github.com', 'AAAA', 0x1234)])
+    print([hex(_x) for _x in create_dns_query('www.example.com', 'A', 0x1234)])
+    print([hex(_x) for _x in create_dns_query('hotmail.com', 'MX', 0x1234)])
+
+
+
+
+
